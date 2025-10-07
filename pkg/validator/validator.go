@@ -1,90 +1,37 @@
 package validator
 
 import (
-	"context"
 	"fmt"
 
 	"gopkg.in/yaml.v3"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/rest"
 )
 
-// Validator validates Kubernetes resources against OpenAPI schemas
+// Validator validates Kubernetes resources against basic schemas
 type Validator struct {
-	discoveryClient discovery.DiscoveryInterface
-	dynamicClient   dynamic.Interface
+	// Simple validator without k8s client dependencies
 }
 
-// NewValidator creates a new validator
-func NewValidator(config *rest.Config) (*Validator, error) {
-	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create discovery client: %w", err)
-	}
-
-	dynamicClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
-	}
-
-	return &Validator{
-		discoveryClient: discoveryClient,
-		dynamicClient:   dynamicClient,
-	}, nil
-}
-
-// NewValidatorWithClients creates a validator with existing clients (for testing)
-func NewValidatorWithClients(discoveryClient discovery.DiscoveryInterface, dynamicClient dynamic.Interface) *Validator {
-	return &Validator{
-		discoveryClient: discoveryClient,
-		dynamicClient:   dynamicClient,
-	}
+// NewValidator creates a new validator instance
+func NewValidator() (*Validator, error) {
+	return &Validator{}, nil
 }
 
 // ValidateResource validates a single Kubernetes resource
 func (v *Validator) ValidateResource(resourceYAML string) error {
-	// Parse YAML to unstructured object
-	obj := &unstructured.Unstructured{}
-	if err := yaml.Unmarshal([]byte(resourceYAML), &obj.Object); err != nil {
-		return fmt.Errorf("failed to parse YAML: %w", err)
+	var resource map[string]interface{}
+	if err := yaml.Unmarshal([]byte(resourceYAML), &resource); err != nil {
+		return fmt.Errorf("invalid YAML: %w", err)
 	}
 
-	// Get GVK
-	gvk := obj.GroupVersionKind()
-	if gvk.Kind == "" {
-		return fmt.Errorf("missing kind in resource")
-	}
-
-	// Basic validation - check required fields
-	if obj.GetName() == "" && obj.GetGenerateName() == "" {
-		return fmt.Errorf("resource must have metadata.name or metadata.generateName")
-	}
-
-	// Validate schema structure
-	if err := v.validateSchema(obj); err != nil {
+	// Basic validation checks
+	if err := v.validateSchema(resource); err != nil {
 		return fmt.Errorf("schema validation failed: %w", err)
 	}
 
 	return nil
 }
 
-// validateSchema performs basic schema validation
-func (v *Validator) validateSchema(obj *unstructured.Unstructured) error {
-	// Check required top-level fields
-	requiredFields := []string{"apiVersion", "kind", "metadata"}
-	for _, field := range requiredFields {
-		if _, found := obj.Object[field]; !found {
-			return fmt.Errorf("missing required field: %s", field)
-		}
-	}
-
-	return nil
-}
-
-// ValidateResources validates multiple resources
+// ValidateResources validates multiple Kubernetes resources
 func (v *Validator) ValidateResources(resources []string) []error {
 	var errors []error
 	for i, resource := range resources {
@@ -95,62 +42,67 @@ func (v *Validator) ValidateResources(resources []string) []error {
 	return errors
 }
 
-// SimulateApply simulates applying a resource (dry-run)
-func (v *Validator) SimulateApply(ctx context.Context, resourceYAML string) error {
-	// Parse YAML to unstructured object
-	obj := &unstructured.Unstructured{}
-	if err := yaml.Unmarshal([]byte(resourceYAML), &obj.Object); err != nil {
-		return fmt.Errorf("failed to parse YAML: %w", err)
+// validateSchema performs basic schema validation
+func (v *Validator) validateSchema(resource map[string]interface{}) error {
+	// Check for required fields
+	if _, ok := resource["apiVersion"]; !ok {
+		return fmt.Errorf("missing required field: apiVersion")
 	}
 
-	// Get GVR (GroupVersionResource)
-	gvr, err := v.getGVR(obj)
-	if err != nil {
-		return fmt.Errorf("failed to get GVR: %w", err)
+	if _, ok := resource["kind"]; !ok {
+		return fmt.Errorf("missing required field: kind")
 	}
 
-	// Perform dry-run create
-	namespace := obj.GetNamespace()
-	if namespace == "" {
-		namespace = "default"
+	metadata, ok := resource["metadata"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("missing or invalid metadata field")
 	}
 
-	// This would normally perform a dry-run, but for offline validation we skip actual API calls
-	_ = gvr
-	_ = namespace
+	if _, ok := metadata["name"]; !ok {
+		return fmt.Errorf("missing required field: metadata.name")
+	}
 
 	return nil
 }
 
-// getGVR gets the GroupVersionResource for an object
-func (v *Validator) getGVR(obj *unstructured.Unstructured) (schema.GroupVersionResource, error) {
-	gvk := obj.GroupVersionKind()
-	
-	// Map common kinds to their plural resource names
-	kindToResource := map[string]string{
-		"Deployment":  "deployments",
-		"Service":     "services",
-		"ConfigMap":   "configmaps",
-		"Secret":      "secrets",
-		"Pod":         "pods",
-		"StatefulSet": "statefulsets",
-		"DaemonSet":   "daemonsets",
-		"Ingress":     "ingresses",
-		"Job":         "jobs",
-		"CronJob":     "cronjobs",
+// GetGVR returns the GroupVersionResource for a given resource
+// Simplified version without client-go dependencies
+func GetGVR(apiVersion, kind string) (string, string, string, error) {
+	// Basic mapping for common resources
+	resourceMap := map[string]map[string][]string{
+		"apps/v1": {
+			"Deployment":  {"apps", "v1", "deployments"},
+			"ReplicaSet":  {"apps", "v1", "replicasets"},
+			"StatefulSet": {"apps", "v1", "statefulsets"},
+		},
+		"v1": {
+			"Pod":       {"", "v1", "pods"},
+			"Service":   {"", "v1", "services"},
+			"ConfigMap": {"", "v1", "configmaps"},
+			"Secret":    {"", "v1", "secrets"},
+			"Namespace": {"", "v1", "namespaces"},
+		},
+		"extensions/v1beta1": {
+			"Ingress": {"extensions", "v1beta1", "ingresses"},
+		},
+		"networking.k8s.io/v1": {
+			"Ingress": {"networking.k8s.io", "v1", "ingresses"},
+		},
+		"batch/v1": {
+			"Job": {"batch", "v1", "jobs"},
+		},
+		"batch/v1beta1": {
+			"CronJob": {"batch", "v1beta1", "cronjobs"},
+		},
 	}
 
-	resource, ok := kindToResource[gvk.Kind]
-	if !ok {
-		// Default: lowercase kind + 's'
-		resource = fmt.Sprintf("%ss", gvk.Kind)
+	if kinds, ok := resourceMap[apiVersion]; ok {
+		if gvr, ok := kinds[kind]; ok {
+			return gvr[0], gvr[1], gvr[2], nil
+		}
 	}
 
-	return schema.GroupVersionResource{
-		Group:    gvk.Group,
-		Version:  gvk.Version,
-		Resource: resource,
-	}, nil
+	return "", "", "", fmt.Errorf("unknown resource type: %s/%s", apiVersion, kind)
 }
 
 // ValidateChart validates all resources in a Helm chart

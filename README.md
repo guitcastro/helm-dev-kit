@@ -4,12 +4,13 @@ A Go framework that converts Terraform-style HCL configurations into validated H
 
 ## Features
 
-- **HCL Parser**: Parse Terraform-style HCL resources and variables
+- **HCL Parser**: Parse Terraform-style HCL resources and variables from directories containing HCL files
 - **Helm Converter**: Convert HCL resources to Helm templates
-- **Variable Mapping**: Automatically map HCL variables to Helm `values.yaml`
+- **Variable Mapping**: Automatically map HCL variables to Helm `values.yaml` with merging for duplicate variables
 - **Kubernetes Validation**: Validate resources against Kubernetes OpenAPI schemas
 - **E2E Testing**: Integration with `sigs.k8s.io/e2e-framework` for testing
-- **CLI Tool**: Command-line interface for converting HCL to Helm charts
+- **CLI Tool**: Command-line interface for converting HCL directories to Helm charts
+- **Directory Processing**: Recursively process all `.hcl` files in a directory structure
 
 ## Installation
 
@@ -33,8 +34,8 @@ func main() {
     // Create converter (without validator for offline mode)
     conv := converter.NewHCLToHelm("my-chart", nil)
     
-    // Convert HCL file to Helm chart
-    chart, err := conv.ConvertFile("deployment.hcl")
+    // Convert directory of HCL files to Helm chart
+    chart, err := conv.Convert("./hcl-configs")
     if err != nil {
         panic(err)
     }
@@ -51,8 +52,15 @@ func main() {
 # Build the CLI
 go build -o helm-dev-kit ./cmd/helm-dev-kit
 
-# Convert HCL to Helm chart
-./helm-dev-kit input.hcl output-dir my-chart
+# Convert directory of HCL files to Helm chart
+./helm-dev-kit ./hcl-configs output-dir my-chart
+
+# Examples:
+# Convert examples directory to a web app chart
+./helm-dev-kit examples charts my-web-app
+
+# Convert microservices directory to a multi-service chart
+./helm-dev-kit examples/microservices charts my-microservices-app
 ```
 
 ## HCL Input Format
@@ -240,6 +248,82 @@ HCL variables are automatically mapped to Helm values:
 | `variable "image_tag"` | `.Values.image_tag` |
 
 Variable references in HCL (`var.replicas`) are converted to Helm template syntax (`{{ .Values.replicas }}`).
+
+## Directory Processing
+
+The framework can process entire directories containing multiple HCL files:
+
+### Directory Structure Example
+
+```
+hcl-configs/
+├── deployment.hcl     # Contains deployment resources and variables
+├── service.hcl        # Contains service resources
+├── configmap.hcl      # Contains configmap resources and variables
+└── subdirectory/
+    └── ingress.hcl    # Recursively processes subdirectories
+```
+
+### Variable Merging
+
+When processing directories, variables with the same name from different files are merged, with later files taking precedence:
+
+```hcl
+# file1.hcl
+variable "replicas" {
+  default = 3
+  description = "First definition"
+}
+
+# file2.hcl  
+variable "replicas" {
+  default = 5
+  description = "Second definition"  # This will be used
+}
+```
+
+The resulting `values.yaml` will contain:
+```yaml
+replicas: 5  # Uses the last definition found
+```
+
+### Non-HCL Files
+
+Only files with the `.hcl` extension are processed. Other files in the directory are ignored.
+
+### Example: Microservices Application
+
+The framework is designed for converting directory structures containing HCL files. Here's an example:
+
+```
+examples/microservices/
+├── frontend.hcl        # Frontend deployment and service
+├── backend.hcl         # Backend deployment and service  
+└── config.hcl          # ConfigMaps for application configuration
+```
+
+Running:
+```bash
+./helm-dev-kit examples/microservices output microservices-chart
+```
+
+Generates a complete Helm chart with:
+- 6 templates (2 deployments, 2 services, 2 configmaps)
+- Merged values from all variable definitions
+- Proper Kubernetes resource structure
+
+### Single File Usage
+
+To convert a single HCL file, simply place it in a directory:
+
+```bash
+# Create a directory for your single file
+mkdir my-app
+cp deployment.hcl my-app/
+
+# Convert the directory
+./helm-dev-kit my-app output my-app-chart
+```
 
 ## Validation
 

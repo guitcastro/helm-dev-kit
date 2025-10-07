@@ -28,21 +28,15 @@ spec:
 apiVersion: v1
 metadata:
   name: test
-spec:
-  replicas: 3
 `,
 			wantError: true,
 		},
 		{
 			name: "missing metadata name",
 			yaml: `
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  labels:
-    app: test
-spec:
-  replicas: 3
+apiVersion: v1
+kind: Pod
+metadata: {}
 `,
 			wantError: true,
 		},
@@ -62,7 +56,11 @@ spec:
 		},
 	}
 
-	validator := &Validator{}
+	validator, err := NewValidator()
+	if err != nil {
+		t.Fatalf("Failed to create validator: %v", err)
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validator.ValidateResource(tt.yaml)
@@ -77,76 +75,78 @@ spec:
 }
 
 func TestValidateResources(t *testing.T) {
+	validator, err := NewValidator()
+	if err != nil {
+		t.Fatalf("Failed to create validator: %v", err)
+	}
+
 	resources := []string{
-		`
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: test-deployment
-spec:
-  replicas: 3
-`,
 		`
 apiVersion: v1
 kind: Service
 metadata:
   name: test-service
-spec:
-  type: ClusterIP
+`,
+		`
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
 `,
 		`
 apiVersion: v1
-kind: Invalid
+kind: Pod
 metadata: {}
-`,
+`, // Invalid - missing name
 	}
 
-	validator := &Validator{}
 	errors := validator.ValidateResources(resources)
-
-	// Should have at least one error (from the invalid resource)
-	if len(errors) == 0 {
-		t.Error("expected at least one error")
+	if len(errors) != 1 {
+		t.Errorf("expected 1 error, got %d", len(errors))
 	}
 }
 
 func TestValidateSchema(t *testing.T) {
+	validator, err := NewValidator()
+	if err != nil {
+		t.Fatalf("Failed to create validator: %v", err)
+	}
+
 	tests := []struct {
-		name      string
-		yaml      string
-		wantError bool
+		name     string
+		resource map[string]interface{}
+		wantErr  bool
 	}{
 		{
 			name: "has all required fields",
-			yaml: `
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: test
-data:
-  key: value
-`,
-			wantError: false,
+			resource: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Pod",
+				"metadata": map[string]interface{}{
+					"name": "test-pod",
+				},
+			},
+			wantErr: false,
 		},
 		{
 			name: "missing apiVersion",
-			yaml: `
-kind: ConfigMap
-metadata:
-  name: test
-`,
-			wantError: true,
+			resource: map[string]interface{}{
+				"kind": "Pod",
+				"metadata": map[string]interface{}{
+					"name": "test-pod",
+				},
+			},
+			wantErr: true,
 		},
 	}
 
-	validator := &Validator{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validator.ValidateResource(tt.yaml)
-			if tt.wantError && err == nil {
+			err := validator.validateSchema(tt.resource)
+			if tt.wantErr && err == nil {
 				t.Error("expected error, got nil")
 			}
-			if !tt.wantError && err != nil {
+			if !tt.wantErr && err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
@@ -155,39 +155,47 @@ metadata:
 
 func TestGetGVR(t *testing.T) {
 	tests := []struct {
-		name         string
-		yaml         string
-		wantResource string
+		name             string
+		apiVersion       string
+		kind             string
+		expectedGroup    string
+		expectedVersion  string
+		expectedResource string
+		wantErr          bool
 	}{
 		{
-			name: "deployment",
-			yaml: `
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: test
-`,
-			wantResource: "deployments",
+			name:             "deployment",
+			apiVersion:       "apps/v1",
+			kind:             "Deployment",
+			expectedGroup:    "apps",
+			expectedVersion:  "v1",
+			expectedResource: "deployments",
+			wantErr:          false,
 		},
 		{
-			name: "service",
-			yaml: `
-apiVersion: v1
-kind: Service
-metadata:
-  name: test
-`,
-			wantResource: "services",
+			name:             "service",
+			apiVersion:       "v1",
+			kind:             "Service",
+			expectedGroup:    "",
+			expectedVersion:  "v1",
+			expectedResource: "services",
+			wantErr:          false,
 		},
 	}
 
-	validator := &Validator{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// This test is limited because we need to parse the YAML first
-			// Just verify the validator can be created
-			if validator == nil {
-				t.Error("validator should not be nil")
+			group, version, resource, err := GetGVR(tt.apiVersion, tt.kind)
+			if tt.wantErr && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if group != tt.expectedGroup || version != tt.expectedVersion || resource != tt.expectedResource {
+				t.Errorf("expected (%s, %s, %s), got (%s, %s, %s)",
+					tt.expectedGroup, tt.expectedVersion, tt.expectedResource,
+					group, version, resource)
 			}
 		})
 	}

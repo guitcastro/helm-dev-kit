@@ -2,10 +2,13 @@ package hcl
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -36,18 +39,49 @@ func NewParser() *Parser {
 	}
 }
 
-// ParseFile parses an HCL file and extracts resources and variables
-func (p *Parser) ParseFile(filename string) ([]Resource, []Variable, error) {
-	content, err := ioutil.ReadFile(filename)
+// ParseDirectory parses all HCL files in a directory and merges resources and variables
+func (p *Parser) ParseDirectory(dirPath string) ([]Resource, []Variable, error) {
+	var allResources []Resource
+	var allVariables []Variable
+
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories and non-HCL files
+		if info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".hcl") {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read file %s: %w", path, err)
+		}
+
+		resources, variables, err := p.parseBytes(content, path)
+		if err != nil {
+			return fmt.Errorf("failed to parse file %s: %w", path, err)
+		}
+
+		allResources = append(allResources, resources...)
+		allVariables = append(allVariables, variables...)
+
+		return nil
+	})
+
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read file: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse directory: %w", err)
 	}
 
-	return p.ParseBytes(content, filename)
+	// Merge variables by name (later definitions override earlier ones)
+	mergedVariables := p.mergeVariables(allVariables)
+
+	return allResources, mergedVariables, nil
 }
 
-// ParseBytes parses HCL content from bytes
-func (p *Parser) ParseBytes(content []byte, filename string) ([]Resource, []Variable, error) {
+// parseBytes parses HCL content from bytes (internal method)
+func (p *Parser) parseBytes(content []byte, filename string) ([]Resource, []Variable, error) {
 	file, diags := p.parser.ParseHCL(content, filename)
 	if diags.HasErrors() {
 		return nil, nil, fmt.Errorf("failed to parse HCL: %s", diags.Error())
@@ -59,6 +93,22 @@ func (p *Parser) ParseBytes(content []byte, filename string) ([]Resource, []Vari
 	}
 
 	return resources, variables, nil
+}
+
+// mergeVariables merges variables by name, with later definitions taking precedence
+func (p *Parser) mergeVariables(variables []Variable) []Variable {
+	variableMap := make(map[string]Variable)
+
+	for _, variable := range variables {
+		variableMap[variable.Name] = variable
+	}
+
+	var result []Variable
+	for _, variable := range variableMap {
+		result = append(result, variable)
+	}
+
+	return result
 }
 
 // extractContent extracts resources and variables from HCL file
@@ -106,11 +156,22 @@ func (p *Parser) parseResource(block *hcl.Block) (Resource, error) {
 
 	attributes := make(map[string]interface{})
 	for name, attr := range attrs {
-		val, diags := attr.Expr.Value(nil)
-		if diags.HasErrors() {
-			return Resource{}, fmt.Errorf("failed to evaluate attribute %s: %s", name, diags.Error())
+		// Try to extract variable references from the expression
+		if varRef := p.extractVariableReference(attr.Expr); varRef != "" {
+			attributes[name] = varRef
+		} else {
+			val, diags := attr.Expr.Value(nil)
+			if diags.HasErrors() {
+				// If evaluation fails, try to get the raw string representation
+				if rawVal := p.getRawExpressionValue(attr.Expr); rawVal != "" {
+					attributes[name] = rawVal
+				} else {
+					return Resource{}, fmt.Errorf("failed to evaluate attribute %s: %s", name, diags.Error())
+				}
+			} else {
+				attributes[name] = ctyToInterface(val)
+			}
 		}
-		attributes[name] = ctyToInterface(val)
 	}
 
 	return Resource{
@@ -118,6 +179,37 @@ func (p *Parser) parseResource(block *hcl.Block) (Resource, error) {
 		Name:       block.Labels[1],
 		Attributes: attributes,
 	}, nil
+}
+
+// extractVariableReference extracts variable references from HCL expressions
+func (p *Parser) extractVariableReference(expr hcl.Expression) string {
+	// Convert to syntax to examine the expression
+	if syntaxExpr, ok := expr.(*hclsyntax.ScopeTraversalExpr); ok {
+		if len(syntaxExpr.Traversal) >= 2 {
+			rootName := syntaxExpr.Traversal[0].(hcl.TraverseRoot).Name
+			if rootName == "var" {
+				varName := syntaxExpr.Traversal[1].(hcl.TraverseAttr).Name
+				return "var." + varName
+			}
+		}
+	}
+	return ""
+}
+
+// getRawExpressionValue attempts to get a string representation of an expression
+func (p *Parser) getRawExpressionValue(expr hcl.Expression) string {
+	// This is a fallback for when we can't evaluate the expression
+	// We'll return a placeholder that the Helm converter can handle
+	if syntaxExpr, ok := expr.(*hclsyntax.ScopeTraversalExpr); ok {
+		if len(syntaxExpr.Traversal) >= 2 {
+			rootName := syntaxExpr.Traversal[0].(hcl.TraverseRoot).Name
+			if rootName == "var" {
+				varName := syntaxExpr.Traversal[1].(hcl.TraverseAttr).Name
+				return "var." + varName
+			}
+		}
+	}
+	return ""
 }
 
 // parseVariable parses a variable block

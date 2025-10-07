@@ -1,0 +1,351 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  GO_VERSION: '1.21'
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.22', '1.23', '1.24']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-${{ matrix.go-version }}-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Run unit tests
+      run: |
+        go test -v -race -coverprofile=coverage.out ./...
+        go tool cover -html=coverage.out -o coverage.html
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-${{ matrix.go-version }}
+        path: |
+          coverage.out
+          coverage.html
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+
+    - name: Run integration tests
+      run: |
+        go test -v -tags=integration ./tests/...
+
+    - name: Build CLI
+      run: |
+        go build -o helm-dev-kit ./cmd/helm-dev-kit
+
+    - name: Test CLI functionality
+      run: |
+        # Test with microservices example
+        ./helm-dev-kit examples/microservices test-output test-chart
+        
+        # Verify output structure
+        test -f test-output/test-chart/Chart.yaml
+        test -f test-output/test-chart/values.yaml
+        test -d test-output/test-chart/templates
+        
+        # Count templates (should be 6)
+        template_count=$(ls test-output/test-chart/templates/*.yaml | wc -l)
+        echo "Generated $template_count templates"
+        test $template_count -eq 6
+
+    - name: Upload CLI artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: helm-dev-kit-cli
+        path: helm-dev-kit
+
+  lint:
+    name: Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        args: --timeout=5m
+
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Install staticcheck
+      run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+    - name: Run staticcheck
+      run: staticcheck ./...
+
+    - name: Install govulncheck
+      run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+    - name: Run vulnerability check
+      run: govulncheck ./...
+
+    - name: Go vet
+      run: go vet ./...
+
+    - name: Check formatting
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "Code is not properly formatted:"
+          gofmt -s -l .
+          exit 1
+        fi
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Install gosec
+      run: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+
+    - name: Run gosec
+      run: gosec ./...
+
+    - name: Install nancy (dependency vulnerability scanner)
+      run: go install github.com/sonatypeoss/nancy@latest
+
+    - name: Run nancy
+      run: |
+        go list -json -deps ./... | nancy sleuth
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [test, lint, static-analysis]
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        export CGO_ENABLED=0
+        output_name=helm-dev-kit-${{ matrix.goos }}-${{ matrix.goarch }}
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          output_name="${output_name}.exe"
+        fi
+        go build -ldflags="-w -s" -o $output_name ./cmd/helm-dev-kit
+        
+        # Create archive
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          zip "${output_name%.exe}.zip" $output_name README.md LICENSE
+        else
+          tar -czf "${output_name}.tar.gz" $output_name README.md LICENSE
+        fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: helm-dev-kit-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: |
+          helm-dev-kit-*
+          *.tar.gz
+          *.zip
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [test, integration, lint, static-analysis, security, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        echo "## Changes in this Release" > CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        
+        # Get commits since last tag
+        LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        if [ -n "$LAST_TAG" ]; then
+          echo "### Commits since $LAST_TAG:" >> CHANGELOG.md
+          git log --pretty=format:"- %s (%h)" $LAST_TAG..HEAD >> CHANGELOG.md
+        else
+          echo "### All commits:" >> CHANGELOG.md
+          git log --pretty=format:"- %s (%h)" >> CHANGELOG.md
+        fi
+        
+        echo "" >> CHANGELOG.md
+        echo "### Assets" >> CHANGELOG.md
+        echo "Download the appropriate binary for your platform from the assets below." >> CHANGELOG.md
+
+    - name: Prepare release assets
+      run: |
+        mkdir release-assets
+        find . -name "*.tar.gz" -o -name "*.zip" | while read file; do
+          cp "$file" release-assets/
+        done
+        ls -la release-assets/
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release-assets/*
+        body_path: CHANGELOG.md
+        draft: false
+        prerelease: ${{ contains(github.ref, '-') }}
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [test, lint, static-analysis]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=sha
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

@@ -65,14 +65,14 @@ func (c *Converter) Convert(resources []hcl.Resource, variables []hcl.Variable) 
 func (c *Converter) resourceToTemplate(resource hcl.Resource) (Template, error) {
 	// Build Kubernetes manifest from resource
 	manifest := make(map[string]interface{})
-	
+
 	// Parse resource type (e.g., "kubernetes_deployment" -> "Deployment")
 	kind := c.parseKind(resource.Type)
 	apiVersion := c.getAPIVersion(kind)
-	
+
 	manifest["apiVersion"] = apiVersion
 	manifest["kind"] = kind
-	
+
 	// Build metadata
 	metadata := make(map[string]interface{})
 	metadata["name"] = fmt.Sprintf("{{ .Values.%s.name | default \"%s\" }}", resource.Name, resource.Name)
@@ -81,7 +81,7 @@ func (c *Converter) resourceToTemplate(resource hcl.Resource) (Template, error) 
 		metadata["labels"] = labels
 	}
 	manifest["metadata"] = metadata
-	
+
 	// Build spec from attributes
 	spec := make(map[string]interface{})
 	for key, value := range resource.Attributes {
@@ -90,13 +90,13 @@ func (c *Converter) resourceToTemplate(resource hcl.Resource) (Template, error) 
 		}
 	}
 	manifest["spec"] = spec
-	
+
 	// Convert to YAML
 	yamlContent, err := yaml.Marshal(manifest)
 	if err != nil {
 		return Template{}, fmt.Errorf("failed to marshal YAML: %w", err)
 	}
-	
+
 	// Create unique template name based on resource name and kind
 	templateName := fmt.Sprintf("%s-%s.yaml", strings.ToLower(resource.Name), strings.ToLower(kind))
 	return Template{
@@ -109,13 +109,13 @@ func (c *Converter) resourceToTemplate(resource hcl.Resource) (Template, error) 
 func (c *Converter) parseKind(resourceType string) string {
 	// Remove "kubernetes_" prefix if present
 	kind := strings.TrimPrefix(resourceType, "kubernetes_")
-	
+
 	// Convert to CamelCase
 	parts := strings.Split(kind, "_")
 	for i, part := range parts {
 		parts[i] = strings.Title(part)
 	}
-	
+
 	return strings.Join(parts, "")
 }
 
@@ -133,11 +133,11 @@ func (c *Converter) getAPIVersion(kind string) string {
 		"Job":         "batch/v1",
 		"CronJob":     "batch/v1",
 	}
-	
+
 	if version, ok := apiVersions[kind]; ok {
 		return version
 	}
-	
+
 	return "v1"
 }
 
@@ -173,31 +173,31 @@ func (c *Converter) WriteChart(chart *Chart, outputDir string) error {
 	// Create chart structure
 	chartDir := filepath.Join(outputDir, chart.Name)
 	templatesDir := filepath.Join(chartDir, "templates")
-	
+
 	// Write Chart.yaml
 	chartMetadata := map[string]interface{}{
-		"apiVersion": "v2",
-		"name":       chart.Name,
-		"version":    "0.1.0",
+		"apiVersion":  "v2",
+		"name":        chart.Name,
+		"version":     "0.1.0",
 		"description": "Generated Helm chart from HCL",
 	}
-	
+
 	chartYAML, err := yaml.Marshal(chartMetadata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Chart.yaml: %w", err)
 	}
-	
+
 	// Write values.yaml
 	valuesYAML, err := yaml.Marshal(chart.Values)
 	if err != nil {
 		return fmt.Errorf("failed to marshal values.yaml: %w", err)
 	}
-	
+
 	// Return the chart data (actual file writing would be done by caller)
 	_ = chartYAML
 	_ = valuesYAML
 	_ = templatesDir
-	
+
 	return nil
 }
 
@@ -213,12 +213,12 @@ func (c *Converter) GetValuesYAML(chart *Chart) (string, error) {
 // GetChartYAML returns the Chart.yaml content as string
 func (c *Converter) GetChartYAML(chart *Chart) (string, error) {
 	chartMetadata := map[string]interface{}{
-		"apiVersion": "v2",
-		"name":       chart.Name,
-		"version":    "0.1.0",
+		"apiVersion":  "v2",
+		"name":        chart.Name,
+		"version":     "0.1.0",
 		"description": "Generated Helm chart from HCL",
 	}
-	
+
 	chartYAML, err := yaml.Marshal(chartMetadata)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal Chart.yaml: %w", err)

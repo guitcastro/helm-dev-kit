@@ -24,36 +24,12 @@ func NewHCLToHelm(chartName string, validator *validator.Validator) *HCLToHelm {
 	}
 }
 
-// ConvertFile converts an HCL file to a validated Helm chart
-func (h *HCLToHelm) ConvertFile(filename string) (*helm.Chart, error) {
-	// Parse HCL file
-	resources, variables, err := h.parser.ParseFile(filename)
+// Convert converts all HCL files in a directory to a validated Helm chart
+func (h *HCLToHelm) Convert(dirPath string) (*helm.Chart, error) {
+	// Parse all HCL files in directory
+	resources, variables, err := h.parser.ParseDirectory(dirPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse HCL file: %w", err)
-	}
-
-	// Convert to Helm chart
-	chart, err := h.converter.Convert(resources, variables)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert to Helm chart: %w", err)
-	}
-
-	// Validate templates if validator is available
-	if h.validator != nil {
-		if err := h.validateChart(chart); err != nil {
-			return nil, fmt.Errorf("validation failed: %w", err)
-		}
-	}
-
-	return chart, nil
-}
-
-// ConvertBytes converts HCL content from bytes to a validated Helm chart
-func (h *HCLToHelm) ConvertBytes(content []byte, filename string) (*helm.Chart, error) {
-	// Parse HCL content
-	resources, variables, err := h.parser.ParseBytes(content, filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse HCL content: %w", err)
+		return nil, fmt.Errorf("failed to parse HCL directory: %w", err)
 	}
 
 	// Convert to Helm chart

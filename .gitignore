@@ -34,3 +34,18 @@ Thumbs.db
 output/
 dist/
 build/
+
+# Coverage reports
+coverage.out
+coverage.html
+profile.out
+
+# Temporary files
+*.tmp
+*.temp
+
+# CI/CD artifacts
+.artifacts/
+
+# Docker build cache
+.docker/

@@ -1,0 +1,192 @@
+# golangci-lint configuration
+# Documentation: https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  gocyclo:
+    min-complexity: 15
+
+  govet:
+    check-shadowing: true
+    enable-all: true
+
+  revive:
+    severity: warning
+    rules:
+      - name: var-naming
+      - name: package-comments
+      - name: exported
+      - name: var-declaration
+      - name: blank-imports
+      - name: context-as-argument
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: increment-decrement
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+  goimports:
+    local-prefixes: github.com/guitcastro/helm-dev-kit
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - dupImport
+      - ifElseChain
+      - octalLiteral
+      - whyNoLint
+      - wrapperFunc
+
+  funlen:
+    lines: 100
+    statements: 50
+
+  gocognit:
+    min-complexity: 20
+
+  nestif:
+    min-complexity: 4
+
+  misspell:
+    locale: US
+
+  lll:
+    line-length: 120
+
+  unparam:
+    check-exported: false
+
+  nakedret:
+    max-func-lines: 30
+
+  prealloc:
+    simple: true
+    range-loops: true
+    for-loops: false
+
+  goconst:
+    min-len: 2
+    min-occurrences: 3
+
+  godox:
+    keywords:
+      - NOTE
+      - OPTIMIZE
+      - HACK
+      - BUG
+      - TODO
+      - FIXME
+
+  whitespace:
+    multi-if: false
+    multi-func: false
+
+linters:
+  disable-all: true
+  enable:
+    # Error detection
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    
+    # Code quality
+    - gocyclo
+    - gocognit
+    - nestif
+    - funlen
+    - goconst
+    - gocritic
+    - revive
+    
+    # Style and formatting
+    - gofmt
+    - goimports
+    - misspell
+    - whitespace
+    - lll
+    
+    # Security
+    - gosec
+    
+    # Performance
+    - prealloc
+    
+    # Best practices
+    - unparam
+    - nakedret
+    - godox
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - funlen
+        - goconst
+        - gocognit
+        - nestif
+        - lll
+
+    # Exclude some staticcheck messages
+    - linters:
+        - staticcheck
+      text: "SA9003:"
+
+    # Exclude lll issues for long lines with go:generate
+    - linters:
+        - lll
+      source: "^//go:generate "
+
+    # Exclude godox for TODO comments in development
+    - linters:
+        - godox
+      text: "TODO"
+
+  # Show only new issues created after git revision `HEAD~1`
+  new-from-rev: HEAD~1
+
+  # Maximum issues count per one linter
+  max-issues-per-linter: 0
+
+  # Maximum count of issues with the same text
+  max-same-issues: 0
+
+  # Fix found issues (if it's supported by the linter)
+  fix: false

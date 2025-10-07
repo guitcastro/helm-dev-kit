@@ -2,6 +2,8 @@ package tests
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/guitcastro/helm-dev-kit/pkg/converter"
@@ -38,11 +40,23 @@ resource "kubernetes_service" "web" {
 }
 `
 
+	// Create temporary directory with HCL file
+	tempDir, err := os.MkdirTemp("", "integration-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "test.hcl")
+	if err := os.WriteFile(testFile, []byte(hclContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
 	// Create converter without validator for offline testing
 	conv := converter.NewHCLToHelm("test-chart", nil)
 
-	// Convert HCL to Helm chart
-	chart, err := conv.ConvertBytes([]byte(hclContent), "test.hcl")
+	// Convert HCL directory to Helm chart
+	chart, err := conv.Convert(tempDir)
 	if err != nil {
 		t.Fatalf("failed to convert HCL to Helm: %v", err)
 	}
@@ -74,8 +88,13 @@ func TestEndToEndWorkflow(t *testing.T) {
 	ctx := context.Background()
 	_ = ctx
 
-	// Step 1: Parse HCL
-	parser := hcl.NewParser()
+	// Create temporary directory with HCL file
+	tempDir, err := os.MkdirTemp("", "integration-test-e2e")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	hclContent := `
 variable "image_tag" {
   type    = "string"
@@ -86,9 +105,16 @@ resource "kubernetes_deployment" "app" {
   replicas = 2
 }
 `
-	resources, variables, err := parser.ParseBytes([]byte(hclContent), "test.hcl")
+	testFile := filepath.Join(tempDir, "test.hcl")
+	if err := os.WriteFile(testFile, []byte(hclContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	// Step 1: Parse HCL directory
+	parser := hcl.NewParser()
+	resources, variables, err := parser.ParseDirectory(tempDir)
 	if err != nil {
-		t.Fatalf("failed to parse HCL: %v", err)
+		t.Fatalf("failed to parse HCL directory: %v", err)
 	}
 
 	if len(resources) != 1 {
@@ -172,8 +198,20 @@ resource "kubernetes_deployment" "app" {
 }
 `
 
+	// Create temporary directory with HCL file
+	tempDir, err := os.MkdirTemp("", "integration-test-complex")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "test.hcl")
+	if err := os.WriteFile(testFile, []byte(hclContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
 	conv := converter.NewHCLToHelm("complex-chart", nil)
-	chart, err := conv.ConvertBytes([]byte(hclContent), "test.hcl")
+	chart, err := conv.Convert(tempDir)
 	if err != nil {
 		t.Fatalf("failed to convert complex HCL: %v", err)
 	}
